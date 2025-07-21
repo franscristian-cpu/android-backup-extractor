@@ -1,78 +1,68 @@
 #!/bin/sh
 
+# Cek apakah sedang di lingkungan Cygwin (Windows POSIX compatibility layer)
 command -v cygpath >/dev/null 2>&1
 on_cygwin=$(( $? == 0 ? 1 : 0 ))
 
-# below, we use non-environment variables to avoid implicitly updating the
-# environment with UNIX versions of paths.
-
+# Ambil jalur JAVA
 if [ "$on_cygwin" = 1 ] && [ "$JAVA" ]; then
-	java=$(cygpath --unix "$JAVA")
+    java=$(cygpath --unix "$JAVA")
 else
-	java=$JAVA
+    java=$JAVA
 fi
 
 if [ "$on_cygwin" = 1 ] && [ "$JAVA_HOME" ]; then
-	java_home=$(cygpath --unix "$JAVA_HOME")
+    java_home=$(cygpath --unix "$JAVA_HOME")
 else
-	java_home=$JAVA_HOME
+    java_home=$JAVA_HOME
 fi
 
-# honor JAVA environment variable if set; if not, use JAVA_HOME (if it's set);
-# if not, fall back to the old hardcoded default.
-: "${java:=${java_home:-/usr}/bin/java}"
+# Gunakan JAVA dari JAVA atau JAVA_HOME, fallback ke /usr/bin/java
+: "${java:=${java_home}/bin/java}"
 
-# Follow symlinks, if we have readlink available; this will allow a symlink to
-# the real wrapper script's location to be installed somewhere on the PATH (ie.
-# /usr/local/bin/abe, or $HOME/bin/abe).
-#
-# This technique has flaws. See http://mywiki.wooledge.org/BashFAQ/028 to
-# understand its limitations before reusing it in your own scripts.
-executable=$0
+# Resolusi path ke direktori dasar
+executable="$0"
 if command -v readlink >/dev/null 2>&1; then
-	while target=$(readlink "$executable"); do
-		[ "$executable" = "$target" ] && break # avoid endless loops
-		executable=$target
-	done
+    while target=$(readlink "$executable"); do
+        [ "$executable" = "$target" ] && break
+        executable="$target"
+    done
 fi
-basedir=$(dirname "$executable")
+basedir=$(cd "$(dirname "$executable")" && pwd)
 
-cp=$basedir:$basedir/bin:$basedir/abe.jar
-for f in $basedir/lib/*.jar; do
-	# note that this technique only works as long as nullglob is disabled
-	# (which it is, by default, on all POSIX shells); we're relying on the
-	# *.jar glob expression returning literally '*.jar' as a result when no
-	# matches exist on-disk.
-	[ -e "$f" ] || {
-		echo "WARNING: No jars found in lib directory. Please download a BouncyCastle implementation per the README (looking for: $f)" >&2
-		continue
-	}
-	cp=$cp:$f
+# 🔧 Perbaiki classpath (classpath)
+cp="$basedir:$basedir/bin:$basedir/abe.jar"
+for f in "$basedir"/lib/*.jar; do
+    if [ -e "$f" ]; then
+        cp="$cp:$f"
+    else
+        echo "WARNING: No jars found in lib directory. BouncyCastle may be missing. Expected: $f" >&2
+    fi
 done
 
-[ -e "$basedir/abe.jar" ] || {
-	echo "ERROR: Could not find abe.jar in $basedir; did you run ant to compile?" >&2
-	exit 1
-}
-
-[ -e "$java" ] || {
-	echo "ERROR: Could not find java executable at $java" >&2
-	exit 1
-}
-
-if [ "$on_cygwin" = 1 ]; then
-	# convert classpath from UNIX to Windows paths
-	unix_cp=$cp
-	IFS=:
-	set -f
-	cp=
-	for element in $unix_cp; do
-		[ "$element" ] || continue
-		cp="$cp;$(cygpath --windows "$element")"
-	done
+# Validasi keberadaan abe.jar
+if [ ! -e "$basedir/abe.jar" ]; then
+    echo "ERROR: Could not find abe.jar in $basedir; did you compile with ant or mvn?" >&2
+    exit 1
 fi
 
-# Using "exec" here replaces the script's process table entry with that of the
-# JVM, avoiding the need to keep the script in memory while the executable
-# runs.
+# Validasi Java
+if [ ! -x "$java" ]; then
+    echo "ERROR: Java executable not found or not executable at: $java" >&2
+    exit 1
+fi
+
+# Konversi classpath di Cygwin ke format Windows
+if [ "$on_cygwin" = 1 ]; then
+    unix_cp="$cp"
+    IFS=:
+    set -f
+    cp=""
+    for element in $unix_cp; do
+        [ "$element" ] || continue
+        cp="$cp;$(cygpath --windows "$element")"
+    done
+fi
+
+# Jalankan aplikasi
 exec "$java" -cp "$cp" org.nick.abe.Main "$@"
